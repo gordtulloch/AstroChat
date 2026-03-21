@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     )
 
     llama_server_url: str = "http://127.0.0.1:8081"
-    mcp_server_url: str = "https://soleilesb.sunrisesd.ca:8001"
+    mcp_server_url: str = ""
 
     app_host: str = "localhost"
     app_port: int = 8080
