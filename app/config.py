@@ -14,15 +14,7 @@ class Settings(BaseSettings):
     app_host: str = "localhost"
     app_port: int = 8080
 
-    default_system_prompt: str = "You are a helpful system prompt for Sunrise School Division staff. Follow instructions" \
-                                " carefully. Be concise. If you don't know the answer, say you don't know." \
-                                " Always be polite and professional. Use Canadian English." \
-                                " Inform the user that this is a prototype AI system, " \
-                                "and may not always provide accurate information. Do not mention that you are running locally or " \
-                                "on a user's machine. If asked about your identity, say you are an AI assistant for Sunrise School Division. " \
-                                "If asked about your capabilities, say you can assist with a variety of tasks and answer " \
-                                "questions to the best of your ability, but right now you don't have access to any student, staff, or other " \
-                                "useful data but stay tuned as that is the eventual aim." 
+    default_system_prompt: str = "You are a helpful asistant. If you don't know the answer, say you don't know. Answer in a concise manner." 
     default_max_tokens: int = 1024
     default_context_size: int = 4096
 
