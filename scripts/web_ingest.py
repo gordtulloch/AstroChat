@@ -11,13 +11,23 @@ Usage:
     python scripts/web_ingest.py --url https://www.sunrisesd.ca --clear
 
 Options:
-    --url           Start URL to crawl (required)
-    --depth         Maximum crawl depth (default: 3)
-    --delay         Seconds between requests, be polite! (default: 0.5)
-    --chunk-size    Characters per chunk (default: 500)
-    --chunk-overlap Overlap between chunks (default: 50)
-    --clear         Wipe the collection before ingesting
-    --dry-run       Print what would be ingested without writing to ChromaDB
+    --url               Start URL to crawl (required)
+    --depth             Maximum crawl depth (default: 3)
+    --delay             Seconds between requests, be polite! (default: 0.5)
+    --chunk-size        Characters per chunk (default: 500)
+    --chunk-overlap     Overlap between chunks (default: 50)
+    --clear             Wipe the collection before ingesting
+    --dry-run           Print what would be ingested without writing to ChromaDB
+    --login-url         URL of the login form to POST to before crawling
+    --username          Username / email for login (use with --login-url)
+    --password          Password for login (use with --login-url)
+    --login-user-field  Form field name for username (default: log  — WordPress default)
+    --login-pass-field  Form field name for password (default: pwd  — WordPress default)
+
+Login example (WordPress / SiteGround):
+    python scripts/web_ingest.py --url https://members.example.com \\
+        --login-url https://members.example.com/wp-login.php \\
+        --username myuser --password mypassword
 """
 from __future__ import annotations
 
@@ -110,8 +120,19 @@ class _TextItem:
         self.content_type = content_type
 
 
-def _run_spider(start_url: str, allowed_domain: str, max_depth: int, delay: float,
-                items: list[_TextItem], errors: list[str]) -> None:
+def _run_spider(
+    start_url: str,
+    allowed_domain: str,
+    max_depth: int,
+    delay: float,
+    items: list[_TextItem],
+    errors: list[str],
+    login_url: str | None = None,
+    login_user_field: str = "log",
+    login_pass_field: str = "pwd",
+    username: str | None = None,
+    password: str | None = None,
+) -> None:
     """Run the Scrapy spider synchronously in a worker thread."""
     import scrapy
     from scrapy.crawler import CrawlerProcess
@@ -125,6 +146,7 @@ def _run_spider(start_url: str, allowed_domain: str, max_depth: int, delay: floa
             "DOWNLOAD_DELAY": delay,
             "DEPTH_LIMIT": max_depth,
             "ROBOTSTXT_OBEY": True,
+            "COOKIES_ENABLED": True,
             "USER_AGENT": "SoleilAI-RAG-Crawler/1.0 (research; contact admin@sunrisesd.ca)",
             "LOG_LEVEL": "WARNING",
             "HTTPCACHE_ENABLED": False,
@@ -133,6 +155,37 @@ def _run_spider(start_url: str, allowed_domain: str, max_depth: int, delay: floa
                              "application/vnd.openxmlformats-officedocument"
                              ".wordprocessingml.document"],
         }
+
+        async def start(self):
+            if login_url and username and password:
+                yield scrapy.Request(login_url, callback=self._do_login, dont_filter=True)
+            else:
+                for url in self.start_urls:
+                    yield scrapy.Request(url, callback=self.parse)
+
+        def _do_login(self, response: Response):
+            # Capture hidden fields (nonce, redirect_to, etc.) from the form
+            hidden = dict(zip(
+                response.css("input[type=hidden]::attr(name)").getall(),
+                response.css("input[type=hidden]::attr(value)").getall(),
+            ))
+            form_data = {**hidden, login_user_field: username, login_pass_field: password}
+            # Resolve the form action against the current page URL;
+            # fall back to the login_url if the action attribute is absent or empty
+            raw_action = response.css("form::attr(action)").get("") or ""
+            action = response.urljoin(raw_action) if raw_action else login_url
+            logger.info("Submitting login form to %s", action)
+            yield scrapy.FormRequest(url=action, formdata=form_data,
+                                     callback=self._after_login)
+
+        def _after_login(self, response: Response):
+            if "incorrect" in response.text.lower() or "error" in response.url.lower():
+                logger.error("Login appears to have failed at %s — check credentials",
+                             response.url)
+            else:
+                logger.info("Login succeeded, starting crawl from %s", start_url)
+            for url in self.start_urls:
+                yield scrapy.Request(url, callback=self.parse, dont_filter=True)
 
         def parse(self, response: Response):
             content_type = response.headers.get("Content-Type", b"").decode().split(";")[0].strip()
@@ -187,15 +240,28 @@ def main() -> None:
                         help="Overlap between chunks (default: 50)")
     parser.add_argument("--clear", action="store_true",
                         help="Wipe the collection before ingesting")
+    parser.add_argument("--login-url", default=None,
+                        help="URL of the login form (e.g. https://example.com/wp-login.php)")
+    parser.add_argument("--username", default=None,
+                        help="Username or email for login")
+    parser.add_argument("--password", default=None,
+                        help="Password for login")
+    parser.add_argument("--login-user-field", default="log",
+                        help="Form field name for username (default: log — WordPress)")
+    parser.add_argument("--login-pass-field", default="pwd",
+                        help="Form field name for password (default: pwd — WordPress)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print page count without writing to ChromaDB")
     args = parser.parse_args()
 
-    parsed = urlparse(args.url)
+    # Normalise backslashes (common when copy-pasting URLs in PowerShell)
+    url = args.url.replace("\\", "/")
+    parsed = urlparse(url)
     allowed_domain = parsed.netloc
-    if not allowed_domain:
-        logger.error("Invalid URL: %s", args.url)
+    if not allowed_domain or parsed.scheme not in ("http", "https"):
+        logger.error("Invalid URL: %s  (tip: use forward slashes, e.g. https://example.com)", url)
         sys.exit(1)
+    args.url = url  # propagate normalised URL
 
     # ------------------------------------------------------------------
     # Initialise retriever (unless dry-run)
@@ -222,6 +288,12 @@ def main() -> None:
             retriever.start()
             logger.info("Collection cleared")
 
+    if args.login_url and not (args.username and args.password):
+        logger.error("--login-url requires both --username and --password")
+        sys.exit(1)
+    if args.login_url:
+        logger.info("Authentication enabled — will log in at %s", args.login_url)
+
     # ------------------------------------------------------------------
     # Crawl
     # ------------------------------------------------------------------
@@ -230,7 +302,14 @@ def main() -> None:
     items: list[_TextItem] = []
     errors: list[str] = []
 
-    _run_spider(args.url, allowed_domain, args.depth, args.delay, items, errors)
+    _run_spider(
+        args.url, allowed_domain, args.depth, args.delay, items, errors,
+        login_url=args.login_url,
+        login_user_field=args.login_user_field,
+        login_pass_field=args.login_pass_field,
+        username=args.username,
+        password=args.password,
+    )
 
     logger.info("Crawl complete — %d page(s) fetched, %d error(s)", len(items), len(errors))
 

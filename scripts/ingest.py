@@ -6,6 +6,7 @@ Usage:
     python scripts/ingest.py --source path/to/file.txt
     python scripts/ingest.py --source path/to/folder --chunk-size 500 --chunk-overlap 50
     python scripts/ingest.py --clear          # wipe the collection and re-index
+    python scripts/ingest.py --source path/to/folder --test  # also write extracted PDF text to data/documents/txt/
 
 Supported file types: .txt, .md, .csv, .pdf, .docx
 """
@@ -34,23 +35,46 @@ _REPO_ROOT = Path(__file__).parent.parent
 _SUPPORTED = {".txt", ".md", ".csv", ".pdf", ".docx"}
 
 
-def _ocr_pdf_page(path: Path, page_index: int) -> str:
-    """Render a single PDF page to an image and return OCR'd text."""
+def _ocr_pdf_page(path: Path, page_index: int, columns: int = 1) -> str:
+    """Render a single PDF page to an image and return OCR'd text.
+
+    When columns > 1 the image is split into that many equal vertical strips
+    and each strip is OCR'd independently, then the results are joined in
+    left-to-right order.  This avoids Tesseract mixing text across columns.
+    """
     import io
 
     import fitz  # pymupdf
     import pytesseract
     from PIL import Image
 
+    # On Windows, Tesseract is often installed but not on PATH — point directly at it
+    if sys.platform == "win32":
+        _win_default = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if Path(_win_default).exists():
+            pytesseract.pytesseract.tesseract_cmd = _win_default
+
     doc = fitz.open(str(path))
     page = doc[page_index]
     # 2× zoom gives ~150 dpi → good OCR accuracy without being too slow
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
     img = Image.open(io.BytesIO(pix.tobytes("png")))
-    return pytesseract.image_to_string(img)
+
+    if columns <= 1:
+        return pytesseract.image_to_string(img)
+
+    width, height = img.size
+    strip_w = width // columns
+    column_texts: list[str] = []
+    for col in range(columns):
+        left = col * strip_w
+        right = width if col == columns - 1 else left + strip_w
+        strip = img.crop((left, 0, right, height))
+        column_texts.append(pytesseract.image_to_string(strip))
+    return "\n\n".join(t for t in column_texts if t.strip())
 
 
-def _read_pdf(path: Path, ocr: bool = False) -> str:
+def _read_pdf(path: Path, ocr: bool = False, columns: int = 1) -> str:
     """Extract text from a PDF using pdfplumber, with optional OCR for image-bearing pages."""
     import pdfplumber
 
@@ -60,7 +84,7 @@ def _read_pdf(path: Path, ocr: bool = False) -> str:
             text = page.extract_text() or ""
             if ocr and page.images:
                 try:
-                    ocr_text = _ocr_pdf_page(path, page.page_number - 1).strip()
+                    ocr_text = _ocr_pdf_page(path, page.page_number - 1, columns=columns).strip()
                     if ocr_text and ocr_text not in text:
                         text = (text + "\n" + ocr_text).strip()
                 except Exception as exc:
@@ -104,8 +128,11 @@ def ingest(
     chunk_size: int,
     chunk_overlap: int,
     ocr: bool = False,
+    columns: int = 1,
+    dump_txt: bool = False,
 ) -> int:
     """Ingest a single file or all supported files in a directory. Returns chunk count."""
+    txt_out_dir = _REPO_ROOT / "data" / "documents" / "txt"
     files: list[Path] = []
     if source.is_dir():
         for ext in _SUPPORTED:
@@ -120,7 +147,7 @@ def ingest(
     for file in files:
         try:
             if file.suffix == ".pdf":
-                text = _read_pdf(file, ocr=ocr)
+                text = _read_pdf(file, ocr=ocr, columns=columns)
             elif file.suffix == ".docx":
                 text = _read_docx(file)
             else:
@@ -128,6 +155,15 @@ def ingest(
         except Exception as exc:
             logger.warning("Could not read %s: %s", file, exc)
             continue
+
+        if dump_txt and file.suffix == ".pdf" and text:
+            try:
+                txt_out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = txt_out_dir / (file.stem + ".txt")
+                out_path.write_text(text, encoding="utf-8")
+                logger.info("Wrote extracted text → %s", out_path.relative_to(_REPO_ROOT))
+            except Exception as exc:
+                logger.warning("Could not write test output for %s: %s", file.name, exc)
 
         chunks = _chunk_text(text, chunk_size, chunk_overlap)
         if not chunks:
@@ -173,6 +209,18 @@ def main() -> None:
         action="store_true",
         help="OCR images embedded in PDF pages (requires Tesseract + pymupdf)",
     )
+    parser.add_argument(
+        "--columns",
+        type=int,
+        default=1,
+        help="Number of text columns per PDF page for OCR (default: 1). "
+             "Use 2 for two-column newsletters/journals.",
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Write extracted PDF text to data/documents/txt/ for inspection",
+    )
     args = parser.parse_args()
 
     retriever = Retriever(
@@ -193,6 +241,7 @@ def main() -> None:
         client.delete_collection(settings.chroma_collection)
         retriever.start()  # recreate empty collection
         logger.info("Collection cleared")
+        return
 
     source = args.source.resolve()
     if not source.exists():
@@ -201,7 +250,14 @@ def main() -> None:
 
     if args.ocr:
         logger.info("OCR enabled — images in PDF pages will be OCR'd")
-    count = ingest(source, retriever, args.chunk_size, args.chunk_overlap, ocr=args.ocr)
+    if args.ocr and args.columns > 1:
+        logger.info("Column mode — each page will be split into %d vertical strip(s) for OCR", args.columns)
+    if args.test:
+        logger.info("Test mode — extracted PDF text will be written to data/documents/txt/")
+    count = ingest(
+        source, retriever, args.chunk_size, args.chunk_overlap,
+        ocr=args.ocr, columns=args.columns, dump_txt=args.test,
+    )
     logger.info("Done — %d total chunk(s) in collection (total stored: %d)", count, retriever.document_count)
 
 

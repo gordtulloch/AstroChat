@@ -91,6 +91,8 @@ class Retriever:
             logger.warning("ChromaDB query failed: %s", exc)
             return []
 
+    _CHROMA_MAX_BATCH = 5000  # ChromaDB's hard limit is ~5461; stay safely below it
+
     def add_documents(
         self,
         documents: list[str],
@@ -100,8 +102,11 @@ class Retriever:
         """Add or update documents in the collection (used by the ingest script)."""
         if not self._available or self._collection is None:
             raise RuntimeError("ChromaDB is not available")
-        self._collection.upsert(
-            documents=documents,
-            ids=ids,
-            metadatas=metadatas or [{} for _ in documents],
-        )
+        metas = metadatas or [{} for _ in documents]
+        for start in range(0, len(documents), self._CHROMA_MAX_BATCH):
+            end = start + self._CHROMA_MAX_BATCH
+            self._collection.upsert(
+                documents=documents[start:end],
+                ids=ids[start:end],
+                metadatas=metas[start:end],
+            )
