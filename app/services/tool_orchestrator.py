@@ -84,6 +84,9 @@ async def run_chat(
       {"type": "error",       "message": "..."}
     """
     tools = mcp_client.tools if mcp_client.available else []
+    logger.info("run_chat: %d tool(s) available to model: %s",
+                len(tools),
+                [t["function"]["name"] for t in tools] or "(none)")
 
     # --- RAG: build a one-shot messages list with context appended to the
     #     system prompt. We never mutate the stored history. ----------------
@@ -162,6 +165,9 @@ async def run_chat(
             tool_calls_acc[i] for i in sorted(tool_calls_acc)
         ]
 
+        logger.debug("Raw assistant_content after stream: %r", assistant_content[:500])
+        logger.debug("OpenAI-format tool_calls_acc: %s", tool_calls_acc)
+
         # Fallback: detect Mistral [TOOL_CALLS] format
         if not tool_calls and "[TOOL_CALLS]" in assistant_content:
             tool_calls, assistant_content = _parse_mistral_tool_calls(assistant_content)
@@ -177,6 +183,7 @@ async def run_chat(
             "tool_calls": tool_calls,
         }
         history.append(assistant_msg)
+        llm_messages.append(assistant_msg)
 
         for tc in tool_calls:
             name = tc["function"]["name"]
@@ -186,28 +193,30 @@ async def run_chat(
                 args = {}
 
             yield {"type": "tool_start", "name": name, "args": args}
+            logger.info("Tool call → %s  args=%s", name, json.dumps(args, ensure_ascii=False)[:200])
 
             try:
                 raw_result = await mcp_client.call_tool(name, args)
                 result_str = _serialize_tool_result(raw_result)
+                logger.info("Tool result ← %s  (%d chars)", name, len(result_str))
                 yield {"type": "tool_result", "name": name, "result": result_str}
-                history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result_str,
-                    }
-                )
+                tool_msg: dict[str, Any] = {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result_str,
+                }
+                history.append(tool_msg)
+                llm_messages.append(tool_msg)
             except Exception as exc:
                 error_str = str(exc)
                 yield {"type": "tool_error", "name": name, "error": error_str}
-                history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": f"Error: {error_str}",
-                    }
-                )
+                error_msg: dict[str, Any] = {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": f"Error: {error_str}",
+                }
+                history.append(error_msg)
+                llm_messages.append(error_msg)
 
         # Loop back for next LLM call with tool results injected
 

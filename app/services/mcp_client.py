@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,11 @@ class MCPClient:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
+        stack = contextlib.AsyncExitStack()
         try:
-            stack = contextlib.AsyncExitStack()
-            read, write = await stack.enter_async_context(sse_client(self.server_url))
+            read, write, _ = await stack.enter_async_context(
+                streamablehttp_client(self.server_url)
+            )
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             self._session = session
@@ -51,9 +53,14 @@ class MCPClient:
             await self._refresh_tools()
             self._available = True
             logger.info("MCP server connected — %d tool(s) available", len(self._tools))
-        except Exception as exc:
-            logger.warning("MCP server unavailable at startup: %s", exc)
+        except (Exception, asyncio.CancelledError, RuntimeError) as exc:
+            # CancelledError is BaseException in Python 3.8+, not Exception.
+            # RuntimeError can be raised by anyio cancel-scope cleanup when the
+            # streamablehttp_client task group tears down on a failed connection.
             self._available = False
+            with contextlib.suppress(Exception):
+                await stack.aclose()
+            logger.warning("MCP server unavailable at startup: %s", exc)
 
     async def stop(self) -> None:
         await self._exit_stack.aclose()
@@ -93,5 +100,9 @@ class MCPClient:
 
     async def _refresh_tools(self) -> None:
         assert self._session is not None
+        logger.info("MCP → requesting tool list from %s", self.server_url)
         result = await self._session.list_tools()
         self._tools = [_mcp_to_openai_tool(t) for t in result.tools]
+        logger.info("MCP ← received %d tool(s): %s",
+                    len(self._tools),
+                    ", ".join(t["function"]["name"] for t in self._tools) or "(none)")

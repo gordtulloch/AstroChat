@@ -704,7 +704,7 @@
     entry.innerHTML = `<div class="tool-name">\u2699\ufe0f ${escHtml(name)}</div>` +
       `<div class="tool-args">Args: ${escHtml(JSON.stringify(args, null, 2))}</div>`;
     details.appendChild(entry);
-    details.open = true;
+    details.open = false;
   }
 
   function addToolResult(msgEl, name, result) {
@@ -713,10 +713,7 @@
       .reverse()
       .find(e => e.dataset.toolName === name);
     if (entry) {
-      const resultDiv = document.createElement("div");
-      resultDiv.className = "tool-result";
-      resultDiv.textContent = "Result: " + (typeof result === "string" ? result : JSON.stringify(result));
-      entry.appendChild(resultDiv);
+      entry.dataset.done = "true";
     }
   }
 

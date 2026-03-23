@@ -64,8 +64,13 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
 
-        url = f"{self.base_url}/v1/chat/completions"
+        logger.info("LLM payload → %d message(s), %d tool(s): %s",
+                    len(messages),
+                    len(tools),
+                    [t["function"]["name"] for t in tools] or "(none)")
+        logger.debug("LLM full payload: %s", json.dumps(payload, ensure_ascii=False))
 
+        url = f"{self.base_url}/v1/chat/completions"
         for attempt in range(_RETRIES):
             try:
                 async with self._client.stream("POST", url, json=payload) as resp:

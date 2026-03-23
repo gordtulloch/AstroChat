@@ -79,13 +79,18 @@ class Retriever:
         if self._collection.count() == 0:
             return []
 
+        logger.info("RAG query: %r", text[:120])
         try:
             results = self._collection.query(
                 query_texts=[text],
                 n_results=min(self.top_k, self._collection.count()),
-                include=["documents"],
+                include=["documents", "metadatas"],
             )
             docs: list[str] = results.get("documents", [[]])[0]
+            metas: list[dict] = results.get("metadatas", [[]])[0]
+            for i, (doc, meta) in enumerate(zip(docs, metas)):
+                source = meta.get("source", "unknown") if meta else "unknown"
+                logger.info("RAG result [%d]: %s (%d chars)", i + 1, source, len(doc))
             return docs
         except Exception as exc:
             logger.warning("ChromaDB query failed: %s", exc)

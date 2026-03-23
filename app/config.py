@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     rag_top_k: int = 3
     rag_enabled: bool = True
 
+    # MCP tool use
+    mcp_enabled: bool = True
+
     # Microsoft Entra authentication
     entra_auth_enabled: bool = False
     entra_tenant_id: str = ""
