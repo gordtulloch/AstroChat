@@ -1,4 +1,4 @@
-# pyLlamaAIClient
+# AstroLlama
 
 Python client for llama.cpp with MCP support, local conversation persistence, and optional Microsoft Entra authentication using MSAL.
 
