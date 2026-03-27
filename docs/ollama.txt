@@ -1,0 +1,111 @@
+To run a local model using Ollama, follow this step-by-step guide:
+
+### 1. Install Ollama
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Windows:**
+Download the installer from [https://ollama.com](https://ollama.com) and run it.
+
+After installation, verify it's working:
+```bash
+ollama --version
+```
+
+### 2. Pull and Run a Model
+
+**Pull a model:**
+```bash
+ollama pull llama3.2
+```
+
+**Run the model interactively:**
+```bash
+ollama run llama3.2
+```
+
+You can now chat with the model in your terminal. Type your messages and press Enter. To exit, type `/bye` or press `Ctrl+D`.
+
+**Run with a prompt directly:**
+```bash
+ollama run llama3.2 "Explain quantum computing in simple terms"
+```
+
+### 3. Useful Commands
+
+- **List downloaded models:**
+  ```bash
+  ollama list
+  ```
+
+- **Remove a model:**
+  ```bash
+  ollama rm llama3.2
+  ```
+
+- **Show model information:**
+  ```bash
+  ollama show llama3.2
+  ```
+
+- **Copy a model:**
+  ```bash
+  ollama cp llama3.2 my-custom-model
+  ```
+
+### 4. Run Ollama as a Background Service (Optional)
+
+To use Ollama's API or integrate with other tools:
+
+**macOS / Linux:**
+```bash
+ollama serve
+```
+
+**Windows:**
+Ollama runs as a background service automatically after installation.
+
+The API will be available at `http://localhost:11434`.
+
+### 5. Popular Models to Try
+
+- `llama3.2` – Latest Llama model from Meta
+- `mistral` – Efficient and powerful
+- `gemma2` – Google's open model
+- `phi3` – Microsoft's compact model
+- `codellama` – Optimized for coding tasks
+
+Example:
+```bash
+ollama run codellama "Write a Python function to sort a list"
+```
+
+### 6. Advanced Usage
+
+**Create a custom model with a Modelfile:**
+```bash
+ollama create mymodel -f ./Modelfile
+```
+
+**Use with API (example with curl):**
+```bash
+curl http://localhost:11434/api/generate -d '{
+  "model": "llama3.2",
+  "prompt": "Why is the sky blue?"
+}'
+```
+
+**Integrate with other tools:**
+Ollama works with LangChain, LlamaIndex, and various UIs like Open WebUI or Continue.dev.
+
+### Tips
+
+- Models are stored locally—no data is sent externally.
+- Larger models require more RAM/VRAM.
+- Use `Ctrl+C` to stop a running model.
+- Check [https://ollama.com/library](https://ollama.com/library) for available models.
+
+With Ollama, you can easily run powerful AI models entirely on your local machine.
