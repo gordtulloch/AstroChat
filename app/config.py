@@ -9,14 +9,18 @@ class Settings(BaseSettings):
     )
 
     llama_server_url: str = "http://127.0.0.1:8081"
-    mcp_server_url: str = ""
+    mcp_server_url: str = "http://localhost:8000/mcp"
 
     app_host: str = "localhost"
     app_port: int = 8080
 
-    default_system_prompt: str = "You are a helpful asistant. If you don't know the answer, say you don't know. Answer in a concise manner." 
+    default_system_prompt: str = (
+        "You are a helpful astronomical assistant. "
+        "Answer questions from your own training knowledge. "
+        "Answer concisely."
+    )
     default_max_tokens: int = 1024
-    default_context_size: int = 4096
+    default_context_size: int = 8192
 
     # ChromaDB / RAG settings
     chroma_db_path: str = "data/chromadb"

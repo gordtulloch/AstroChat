@@ -1,0 +1,198 @@
+# Disabled MCP tool registrations
+# These tools have handlers in call_tool() but are not advertised to the LLM.
+# To re-enable, add them back into the list returned by handle_list_tools().
+
+        types.Tool(
+            name="search_objects",
+            description=(
+                "Query the DESI spectroscopic survey catalogue via Data Lab SQL. "
+                "Use this ONLY for faint-object spectroscopic data: redshifts, galaxy/QSO spectra, and DESI tracer populations (LRG, ELG, BGS, QSO). "
+                "Requires explicit RA/Dec coordinates or a bounding box — it does NOT understand constellation or object names. "
+                "Has NO magnitude column — do NOT use this for queries involving visual magnitude or brightness limits. "
+                "For bright named stars, constellation searches, or magnitude-filtered queries, use astroquery_query with service_name='simbad' instead."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Data source to search (currently only 'desi' supported)",
+                        "enum": ["desi"],
+                        "default": "desi"
+                    },
+                    "ra": {
+                        "type": "number",
+                        "description": "Right Ascension for point/cone search (decimal degrees, 0-360)"
+                    },
+                    "dec": {
+                        "type": "number",
+                        "description": "Declination for point/cone search (decimal degrees, -90 to +90)"
+                    },
+                    "radius": {
+                        "type": "number",
+                        "description": "Search radius in degrees for cone search. If not specified with ra/dec, defaults to 0.001° (3.6 arcsec)"
+                    },
+                    "ra_min": {
+                        "type": "number",
+                        "description": "Minimum RA for box search (decimal degrees)"
+                    },
+                    "ra_max": {
+                        "type": "number",
+                        "description": "Maximum RA for box search (decimal degrees)"
+                    },
+                    "dec_min": {
+                        "type": "number",
+                        "description": "Minimum Dec for box search (decimal degrees)"
+                    },
+                    "dec_max": {
+                        "type": "number",
+                        "description": "Maximum Dec for box search (decimal degrees)"
+                    },
+                    "object_types": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["GALAXY", "QSO", "STAR"]},
+                        "description": "List of object types to search for"
+                    },
+                    "tracers": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["LRG", "ELG", "BGS", "QSO"]},
+                        "description": "List of DESI spectroscopic tracers to filter by (LRG=Luminous Red Galaxies, ELG=Emission Line Galaxies, BGS=Bright Galaxy Survey, QSO=Quasars). Uses DESI targeting bitmasks for precise selection."
+                    },
+                    "redshift_min": {
+                        "type": "number",
+                        "description": "Minimum redshift"
+                    },
+                    "redshift_max": {
+                        "type": "number",
+                        "description": "Maximum redshift"
+                    },
+                    "data_releases": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["DR1"]},
+                        "description": "List of DESI data releases to query. Only 'DR1' is publicly available.",
+                        "default": ["DR1"]
+                    },
+                    "auto_save": {
+                        "type": "boolean",
+                        "description": "Automatically save search results to file (default: True)",
+                        "default": True
+                    },
+                    "output_file": {
+                        "type": "string",
+                        "description": "Custom filename for saved results (auto-generated if not specified)"
+                    },
+                    "async_query": {
+                        "type": "boolean",
+                        "description": "Use asynchronous query for large datasets",
+                        "default": False
+                    }
+                },
+                "additionalProperties": True
+            }
+        ),
+        types.Tool(
+            name="get_spectrum_by_targetid",
+            description="Retrieve spectrum data using DESI targetid by automatically finding the corresponding SPARCL UUID. This bridges the gap between catalog search results and spectrum retrieval.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Data source (currently only 'desi' supported)",
+                        "enum": ["desi"],
+                        "default": "desi"
+                    },
+                    "targetid": {
+                        "type": "string",
+                        "description": "DESI target identifier from catalog search, as a string to preserve precision for large numbers"
+                    },
+                    "data_release": {
+                        "type": "string",
+                        "description": "DESI data release to search in",
+                        "default": "DR1"
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Output format: 'summary' for metadata only, 'full' for complete spectral arrays",
+                        "enum": ["summary", "full"],
+                        "default": "summary"
+                    },
+                    "auto_save": {
+                        "type": "boolean",
+                        "description": "Automatically save spectrum data to file"
+                    },
+                    "output_file": {
+                        "type": "string",
+                        "description": "Custom filename for saved spectrum"
+                    }
+                },
+                "required": ["targetid"]
+            }
+        ),
+        types.Tool(
+            name="preview_data",
+            description="Shows file metadata, structure, and sample data with full file paths for easy loading. Works with all file types from any data source. Provides Python code examples for manual file loading.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "identifier": {
+                        "type": "string",
+                        "description": "File ID or filename to preview"
+                    },
+                    "preview_rows": {
+                        "type": "integer",
+                        "description": "Number of rows to show in preview (default: 10)",
+                        "default": 10
+                    }
+                },
+                "required": ["identifier"]
+            }
+        ),
+        types.Tool(
+            name="list_files",
+            description="List saved files across all data sources with powerful filtering and sorting options. Better than basic directory listing for managing astronomical data files.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Filter by data source: desi, act, etc."
+                    },
+                    "file_type": {
+                        "type": "string",
+                        "description": "Filter by file type: json, csv, npy, fits"
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Filter by filename pattern (supports wildcards like *galaxy*)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return",
+                        "default": 20
+                    }
+                }
+            }
+        ),
+        types.Tool(
+            name="file_statistics",
+            description="Get comprehensive file system statistics including storage usage, file counts by type/source, and recent files across all data sources.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        types.Tool(
+            name="convert_to_fits",
+            description="Convert saved data files to FITS format using astropy",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "identifier": {"type": "string", "description": "File ID or filename to convert"},
+                    "data_type": {"type": "string", "enum": ["auto", "catalog", "spectrum", "image", "generic"], "description": "Type of astronomical data for optimal conversion"},
+                    "output_file": {"type": "string", "description": "Custom output filename (optional)"},
+                    "preserve_metadata": {"type": "boolean", "description": "Include original file metadata in FITS headers", "default": True}
+                },
+                "required": ["identifier"]
+            }
+        ),

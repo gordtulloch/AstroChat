@@ -272,6 +272,35 @@ html, body { height: 100%; font-family: system-ui, sans-serif; background: var(-
   font-size: 0.85rem;
 }
 
+/* ---- Pygments code blocks ---------------------------------- */
+.code-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+.code-lang {
+  background: #2d2d2d;
+  color: var(--text-muted);
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+.code-block .highlight {
+  margin: 0;
+}
+.code-block .highlight pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  background: #272822; /* monokai background */
+  font-family: 'Courier New', Consolas, monospace;
+  line-height: 1.5;
+}
+
 .rendered-html table {
   border-collapse: collapse;
   width: 100%;

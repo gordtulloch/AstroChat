@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.routers import chat as chat_router
 from app.routers import conversations as conv_router
+from app.routers import files as files_router
+from app.routers import highlight as highlight_router
 from app.services.auth import EntraTokenValidator
 from app.services.llm import LLMClient
 from app.services.mcp_client import MCPClient
@@ -24,12 +26,22 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 # Enable DEBUG for tool/LLM diagnostics
-logging.getLogger("app.services.llm").setLevel(logging.DEBUG)
-logging.getLogger("app.services.tool_orchestrator").setLevel(logging.DEBUG)
+logging.getLogger("app.services.llm").setLevel(logging.WARNING)
+logging.getLogger("app.services.tool_orchestrator").setLevel(logging.WARNING)
 # The MCP SSE library logs its own ERROR + traceback before raising when the
 # server is unreachable. We handle that gracefully in MCPClient.start() and
 # emit our own WARNING, so suppress the library's internal noise.
 logging.getLogger("mcp.client.sse").setLevel(logging.CRITICAL)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+class _StatusFilter(logging.Filter):
+    """Drop uvicorn access log lines for /api/status polling."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/status" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(_StatusFilter())
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +51,9 @@ async def lifespan(app: FastAPI):
     conv_dir = _REPO_ROOT / "data" / "conversations"
     conv_dir.mkdir(parents=True, exist_ok=True)
     app.state.conv_dir = conv_dir
+
+    downloads_dir = _REPO_ROOT / "data" / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
 
     llm_client = LLMClient(settings.llama_server_url)
     app.state.llm_client = llm_client
@@ -86,6 +101,8 @@ app = FastAPI(title="LocalAI Chat Client", version="0.1.0", lifespan=lifespan)
 
 app.include_router(chat_router.router, prefix="/api")
 app.include_router(conv_router.router, prefix="/api")
+app.include_router(files_router.router, prefix="/api")
+app.include_router(highlight_router.router)
 
 # Serve the static single-page UI
 _static_dir = _REPO_ROOT / "static"

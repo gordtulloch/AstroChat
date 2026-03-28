@@ -8,6 +8,7 @@ logs/*
 # AI Models
 *.gguf
 ai/*
+data/downloads/*
 
 # IDEs
 # Keep .vscode/ workspace settings for Rust/Bevy development

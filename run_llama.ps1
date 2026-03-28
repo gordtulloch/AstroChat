@@ -13,7 +13,7 @@ param(
 
     [string]$ListenHost = "127.0.0.1",
     [int]$Port = 8081,
-    [int]$ContextSize = 4096,
+    [int]$ContextSize = 8192,
 
     [string[]]$ExtraArgs = @()
 )
@@ -102,6 +102,8 @@ if (-not $ModelPath) {
 if (-not $ModelPath) {
     $aiDir = Join-Path $RepoRoot "ai"
     $preferredModels = @(
+        (Join-Path $aiDir "Llama-3.2-1B.Q8_0.gguf"),
+        (Join-Path $aiDir "Qwen2.5-3B-Instruct-Q8_0.gguf"),
         (Join-Path $aiDir "mistral-7b-instruct-v0.2.Q3_K_M.gguf"),
         (Join-Path $aiDir "deepseek-coder.gguf")
     )

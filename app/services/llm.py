@@ -63,8 +63,11 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = tools
+            # Tool-call argument JSON can be large; ensure there is enough
+            # token budget so llama-server never truncates it mid-string.
+            payload["max_tokens"] = max(max_tokens, 2048)
 
-        logger.info("LLM payload → %d message(s), %d tool(s): %s",
+        logger.debug("LLM payload → %d message(s), %d tool(s): %s",
                     len(messages),
                     len(tools),
                     [t["function"]["name"] for t in tools] or "(none)")
@@ -74,6 +77,13 @@ class LLMClient:
         for attempt in range(_RETRIES):
             try:
                 async with self._client.stream("POST", url, json=payload) as resp:
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        logger.error(
+                            "llama-server HTTP %d: %s",
+                            resp.status_code,
+                            resp.text[:1000],
+                        )
                     resp.raise_for_status()
                     async for raw_line in resp.aiter_lines():
                         if not raw_line.startswith("data:"):

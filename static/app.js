@@ -591,10 +591,10 @@
       state.conversationId = id;
       state.messages = conv.messages || [];
       messagesEl.innerHTML = "";
-      state.messages.forEach(msg => {
-        if (msg.role === "system") return;
-        appendMessage(msg.role === "user" ? "user" : "assistant", msg.content || "");
-      });
+      for (const msg of state.messages) {
+        if (msg.role === "system") continue;
+        await appendMessage(msg.role === "user" ? "user" : "assistant", msg.content || "");
+      }
       loadConvList();
     } catch (_) {}
   }
@@ -642,7 +642,7 @@
   }
 
   // ---- Message rendering -------------------------------------------
-  function appendMessage(role, text) {
+  async function appendMessage(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + role;
     const label = document.createElement("div");
@@ -651,11 +651,13 @@
     div.appendChild(label);
     const content = document.createElement("div");
     content.className = "msg-content";
-    
-    // Parse content for ```html blocks and render them
-    const parsed = parseAndRenderContent(text);
-    content.appendChild(parsed);
-    
+    if (role === "assistant") {
+      content.innerHTML = await renderHighlighted(text);
+    } else {
+      const p = document.createElement("p");
+      p.textContent = text;
+      content.appendChild(p);
+    }
     div.appendChild(content);
     messagesEl.appendChild(div);
     scrollToBottom();
@@ -717,6 +719,29 @@
     }
   }
 
+  function addToolDownload(msgEl, name, url, size) {
+    const details = ensureToolDetails(msgEl);
+    const entry = [...details.querySelectorAll(".tool-entry")]
+      .reverse()
+      .find(e => e.dataset.toolName === name);
+    const sizeStr = size > 1048576
+      ? (size / 1048576).toFixed(1) + " MB"
+      : (size / 1024).toFixed(1) + " KB";
+    const linkHtml = `<div class="tool-download">💾 Result too large for inline display (${escHtml(sizeStr)}) — ` +
+      `<a href="${escHtml(url)}" download>Download file</a></div>`;
+    if (entry) {
+      entry.dataset.done = "true";
+      entry.insertAdjacentHTML("beforeend", linkHtml);
+    } else {
+      const div = document.createElement("div");
+      div.className = "tool-entry";
+      div.dataset.toolName = name;
+      div.dataset.done = "true";
+      div.innerHTML = `<div class="tool-name">⚙️ ${escHtml(name)}</div>` + linkHtml;
+      details.appendChild(div);
+    }
+  }
+
   function addToolError(msgEl, name, error) {
     const details = ensureToolDetails(msgEl);
     const errDiv = document.createElement("div");
@@ -734,74 +759,55 @@
       .replace(/"/g, "&quot;");
   }
 
-  // Parse text for ```html blocks and convert to rendered HTML + plain text
-  function parseAndRenderContent(text) {
-    const fragment = document.createDocumentFragment();
-    
-    // Regex to find ```html ... ``` blocks (flexible whitespace handling)
-    const htmlBlockRegex = /```html\s*([\s\S]*?)\s*```/g;
-    let lastIndex = 0;
-    let match;
-    let foundHtml = false;
-    
-    console.log("[HTML Render] Parsing content for HTML blocks, text length:", text.length);
-    console.log("[HTML Render] Text preview:", text.substring(0, 150));
-    
-    while ((match = htmlBlockRegex.exec(text)) !== null) {
-      foundHtml = true;
-      console.log("[HTML Render] Found HTML block at index", match.index, "match starts:", match[0].substring(0, 30));
-      
-      // Add text before this HTML block (as plain text)
-      if (match.index > lastIndex) {
-        const plainText = text.substring(lastIndex, match.index).trim();
-        if (plainText) {
-          const p = document.createElement("p");
-          p.textContent = plainText;
-          fragment.appendChild(p);
-          console.log("[HTML Render] Added plain text section");
+  // ---- Pygments syntax highlighting via backend API ---------------
+
+  /** Fetch the Pygments CSS once and inject it into <head>. */
+  async function initHighlightStyles() {
+    try {
+      const r = await apiFetch("/api/highlight/styles");
+      if (!r.ok) return;
+      const css = await r.text();
+      const style = document.createElement("style");
+      style.id = "pygments-styles";
+      style.textContent = css;
+      document.head.appendChild(style);
+    } catch (_) {}
+  }
+
+  /**
+   * Send *text* to the backend highlight endpoint and return an HTML string.
+   * Falls back to client-side <pre><code> rendering on error.
+   */
+  async function renderHighlighted(text) {
+    try {
+      const r = await apiFetch("/api/highlight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        return data.html;
+      }
+      console.warn("[Highlight] API returned", r.status, "— using client-side fallback");
+    } catch (err) {
+      console.warn("[Highlight] API call failed:", err);
+    }
+    // Client-side fallback: detect ```lang ... ``` blocks and wrap in <pre><code>
+    return text
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")  // escape first
+      .replace(
+        /```(\w*)\n?([\s\S]*?)```/g,
+        (_, lang, code) => {
+          const label = lang
+            ? `<div class="code-lang">${lang}</div>`
+            : "";
+          return `<div class="code-block">${label}<div class="highlight"><pre>${code}</pre></div></div>`;
         }
-      }
-      
-      // Add the HTML block (rendered as actual HTML)
-      const htmlContent = match[1].trim();
-      console.log("[HTML Render] Rendering HTML content, length:", htmlContent.length);
-      console.log("[HTML Render] HTML preview:", htmlContent.substring(0, 100));
-      
-      const htmlDiv = document.createElement("div");
-      htmlDiv.className = "rendered-html";
-      try {
-        htmlDiv.innerHTML = htmlContent; // Render the HTML
-        fragment.appendChild(htmlDiv);
-        console.log("[HTML Render] HTML div appended successfully");
-      } catch (e) {
-        console.error("[HTML Render] Error rendering HTML:", e);
-        // Fallback: show as code if rendering fails
-        const pre = document.createElement("pre");
-        pre.textContent = htmlContent;
-        fragment.appendChild(pre);
-      }
-      
-      lastIndex = match.index + match[0].length;
-    }
-    
-    // Add any remaining text after the last HTML block, OR all text if no HTML found
-    if (!foundHtml) {
-      // No HTML blocks at all — just create one plain text paragraph
-      const p = document.createElement("p");
-      p.textContent = text;
-      fragment.appendChild(p);
-    } else if (lastIndex < text.length) {
-      // There were HTML blocks and there's text remaining after the last one
-      const plainText = text.substring(lastIndex).trim();
-      if (plainText) {
-        const p = document.createElement("p");
-        p.textContent = plainText;
-        fragment.appendChild(p);
-        console.log("[HTML Render] Added remaining text section");
-      }
-    }
-    
-    return fragment;
+      )
+      .replace(/\n{2,}/g, "</p><p>")
+      .replace(/\n/g, "<br>")
+      .replace(/^(.+)$/, "<p>$1</p>");
   }
 
   // ---- Send message ------------------------------------------------
@@ -902,6 +908,11 @@
               scrollToBottom();
               break;
 
+            case "tool_download":
+              addToolDownload(aiBubble, event.name, event.url, event.size);
+              scrollToBottom();
+              break;
+
             case "tool_error":
               addToolError(aiBubble, event.name, event.error);
               scrollToBottom();
@@ -924,18 +935,11 @@
             }
 
             case "done":
-              // Persist assistant message to local state
               if (assistantText) {
                 state.messages.push({ role: "assistant", content: assistantText });
-                
-                // Now that streaming is complete, parse and render any HTML blocks
                 if (contentEl) {
-                  console.log("[Streaming] Done event: rendering HTML in streamed content");
-                  console.log("[Streaming] assistantText length:", assistantText.length);
-                  contentEl.innerHTML = ""; // Clear the plain text
-                  const parsed = parseAndRenderContent(assistantText);
-                  contentEl.appendChild(parsed);
-                  console.log("[Streaming] HTML rendering complete, contentEl now has", contentEl.children.length, "children");
+                  contentEl.innerHTML = await renderHighlighted(assistantText);
+                  scrollToBottom();
                 }
               }
               break;
@@ -1042,6 +1046,7 @@
     
     // Main window initialization
     loadSettings();
+    await initHighlightStyles();
 
     try {
       await initAuth();
