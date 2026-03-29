@@ -329,16 +329,21 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="search_astroquery_services",
-            description="Search astroquery services by data type, wavelength coverage, object type, or other criteria",
+            description=(
+                "Search for an astroquery service name when you do NOT already know it. "
+                "DO NOT call this for standard star, object, or constellation queries — "
+                "for those, call astroquery_query directly with service_name='simbad'. "
+                "Use this ONLY when you need to discover which service handles an "
+                "unfamiliar data type (e.g. radio continuum surveys, X-ray catalogues)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "data_type": {"type": "string", "description": "Filter by data type (e.g., 'images', 'spectra', 'catalogs', 'photometry')"},
-                    "wavelength": {"type": "string", "description": "Filter by wavelength coverage (e.g., 'optical', 'radio', 'infrared', 'x-ray')"},
-                    "object_type": {"type": "string", "description": "Filter by object type (e.g., 'stars', 'galaxies', 'quasars')"},
-                    "capability": {"type": "string", "description": "Filter by capability (e.g., 'query_region', 'query_object')"},
-                    "requires_auth": {"type": "boolean", "description": "Filter by authentication requirement"}
-                }
+                    "data_type": {"type": "string", "description": "Filter by data type (e.g. 'spectra', 'images', 'photometry')"},
+                    "wavelength": {"type": "string", "description": "Filter by wavelength coverage (e.g. 'optical', 'radio', 'infrared', 'x-ray')"},
+                    "object_type": {"type": "string", "description": "Filter by object type (e.g. 'galaxies', 'quasars')"}
+                },
+                "additionalProperties": False
             }
         ),
         types.Tool(
@@ -348,13 +353,15 @@ async def handle_list_tools() -> list[types.Tool]:
                 "DO NOT use this for weather, time, or geocoding — use get_weather, get_current_time, or get_latlong instead. "
                 "\n\n"
                 "FOR CONSTELLATION / MAGNITUDE QUERIES (e.g. 'stars in Orion brighter than magnitude 5'):\n"
+                "  Call THIS tool directly — do NOT call search_astroquery_services or get_astroquery_service_details first.\n"
                 "  Use service_name='simbad', query_type='query_region', object_name='Ori', "
                 "radius=12 (Orion spans ~20 deg — use 10-15), vmag_max=5.\n"
                 "  Do NOT also pass ra/dec when using object_name — pick one or the other.\n"
-                "  Do NOT pass data_type, wavelength, magnitude, or other non-SIMBAD parameters.\n\n"
+                "  Do NOT pass data_type, wavelength, magnitude, capability, requires_auth, "
+                "or other non-SIMBAD parameters.\n\n"
                 "  Alternatively use query_type='query_criteria' with "
                 "criteria=\"region(Circle, Ori, 12d) & Vmag <= 5\".\n\n"
-                "IMPORTANT: Call 'get_astroquery_service_details' first when unsure of a service's parameters."
+                "Call 'get_astroquery_service_details' only when you need to explore an unfamiliar service."
             ),
             inputSchema={
                 "type": "object",
@@ -417,29 +424,6 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["latitude", "longitude"]
             }
         ),
-        types.Tool(
-            name="get_latlong",
-            description="Geocode a city or place name to latitude, longitude, and timezone using the free Open-Meteo geocoding API. No API key required.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "City or place name, e.g. 'Winnipeg, Manitoba' or 'Tokyo, Japan'"},
-                    "count": {"type": "integer", "description": "Maximum number of results to return (default: 1, max: 5)", "default": 1}
-                },
-                "required": ["location"]
-            }
-        ),
-        types.Tool(
-            name="get_current_time",
-            description="Get the current local time and date for any city or place. No API key required.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "City or place name, e.g. 'Winnipeg, Manitoba' or 'Tokyo, Japan'"}
-                },
-                "required": ["location"]
-            }
-        )
     ]
 
 
@@ -762,32 +746,48 @@ View file info: preview_data('{save_result['file_id']}')
                 # The help text is already pre-formatted
                 return [types.TextContent(type="text", text=result['help'])]
 
-            # Success case
-            response = f"Successfully executed '{result['query_type']}' on '{result['service']}'.\\n"
-            response += f"Found {result['num_results']} results.\\n\\n"
-            
-            # Add file info if auto-saved
-            save_result = result.get('save_result')
-            if save_result and save_result['status'] == 'success':
-                response += f"RESULTS AUTOMATICALLY SAVED:\\n"
-                response += f"- File ID: {save_result['file_id']}\\n"
-                response += f"- Filename: {save_result['filename']}\\n"
-                response += f"\\nUse preview_data('{save_result['file_id']}') to inspect the saved data.\\n"
-            
-            elif result['num_results'] > 0:
-                results_data = result['results']
-                if isinstance(results_data, str):
-                    response += "Result:\\n"
-                    response += results_data
-                else:
-                    response += "Showing first 5 results (data was not saved):\\n"
-                    # Pretty print the first few results
-                    preview_data = results_data[:5]
-                    response += json.dumps(preview_data, indent=2)
+            # Success case — always return inline data so the LLM can answer directly
+            response = f"Successfully executed '{result['query_type']}' on '{result['service']}'.\n"
+            response += f"Found {result['num_results']} results.\n\n"
 
-                    if result['num_results'] > 5:
-                        response += f"\\n\\n... and {result['num_results'] - 5} more."
-            
+            results_data = result['results']
+            if isinstance(results_data, list) and len(results_data) > 0:
+                # Sort by V magnitude ascending (brightest first) when available
+                vmag_key = next((k for k in results_data[0] if k.upper() == 'FLUX_V'), None)
+                if vmag_key:
+                    def _vmag_sort(row):
+                        v = row.get(vmag_key)
+                        try:
+                            return float(v)
+                        except (TypeError, ValueError):
+                            return 999.0
+                    results_data = sorted(results_data, key=_vmag_sort)
+
+                # Select the most useful columns; fall back to all columns
+                KEY_COLS = ['MAIN_ID', 'FLUX_V', 'RA', 'DEC', 'SP_TYPE', 'OTYPE']
+                sample = results_data[0]
+                cols = [c for c in KEY_COLS if c in sample] or list(sample.keys())
+
+                MAX_INLINE = 25
+                preview = [{c: row.get(c) for c in cols} for row in results_data[:MAX_INLINE]]
+                label = "sorted by V magnitude (brightest first)" if vmag_key else "first results"
+                response += f"Results ({label}):\n"
+                response += json.dumps(preview, indent=2)
+                if result['num_results'] > MAX_INLINE:
+                    response += f"\n\n... {result['num_results'] - MAX_INLINE} more rows not shown."
+            elif isinstance(results_data, str):
+                response += results_data
+
+            # Footnote: mention saved file without directing LLM to call another tool
+            save_result = result.get('save_result')
+            if save_result and save_result.get('status') == 'success':
+                response += f"\n\nFull dataset saved to: {save_result['filename']}"
+
+            logger.info(
+                f"[astroquery_query] Tool response ({len(response)} chars):\n"
+                f"{'─' * 72}\n{response}\n{'─' * 72}"
+            )
+
             return [types.TextContent(type="text", text=response)]
         
         else:
@@ -1062,4 +1062,7 @@ async def _run_http(port: int):
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

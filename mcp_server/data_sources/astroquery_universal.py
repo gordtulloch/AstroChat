@@ -87,52 +87,45 @@ _CONSTELLATION_ABBREVS = {
 
 @functools.lru_cache(maxsize=None)
 def _constellation_center(iau_abbrev: str):
-    """Compute approximate (ra_deg, dec_deg) for a constellation.
+    """Compute (ra_deg, dec_deg) centroid for a constellation.
 
-    Uses astropy's internal boundary-strip data (J1875.0 epoch). Each strip gives
-    RA_low, RA_high (hours) and Dec (degrees). We take the midpoint of each strip,
-    then compute the circular mean of RA and the arithmetic mean of Dec. The J1875→J2000
-    precession shift is at most ~1–2° and is negligible for wide cone searches.
+    Samples a 3°×3° sky grid, identifies all points belonging to the target
+    constellation via astropy.coordinates.get_constellation(), then returns
+    their circular-mean RA and arithmetic-mean Dec.
     """
     try:
-        from astropy.utils.data import get_pkg_data_filename
         import numpy as np
+        from astropy.coordinates import SkyCoord, get_constellation
+        import astropy.units as u
 
-        fname = get_pkg_data_filename(
-            'data/constellation_boundary_data.dat',
-            package='astropy.coordinates',
-        )
-        target = iau_abbrev.upper()
-        ra_mids_rad, decs = [], []
-        with open(fname) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) < 4:
-                    continue
-                ra_low, ra_high, dec = float(parts[0]), float(parts[1]), float(parts[2])
-                if parts[3].upper() == target:
-                    # RA strip midpoint in hours → radians
-                    ra_mid_rad = np.deg2rad((ra_low + ra_high) / 2.0 * 15.0)
-                    ra_mids_rad.append(ra_mid_rad)
-                    decs.append(dec)
+        step = 3.0  # degrees — coarse enough to be fast, fine enough for all 88 constellations
+        ras = np.arange(0.0, 360.0, step)
+        decs = np.arange(-89.0, 90.0, step)
+        RA, DEC = np.meshgrid(ras, decs)
+        ra_flat = RA.ravel()
+        dec_flat = DEC.ravel()
 
-        if not ra_mids_rad:
+        coords = SkyCoord(ra=ra_flat * u.deg, dec=dec_flat * u.deg, frame='icrs')
+        abbrevs = get_constellation(coords, short_name=True)
+
+        target_lower = iau_abbrev.lower()
+        mask = np.array([a.lower() == target_lower for a in abbrevs])
+        if not mask.any():
+            logger.warning(f"No grid points found for constellation '{iau_abbrev}'")
             return None
 
-        # Circular mean handles constellations that straddle the 0h/24h boundary
-        mean_ra_rad = np.arctan2(
-            np.mean(np.sin(ra_mids_rad)),
-            np.mean(np.cos(ra_mids_rad)),
-        )
+        hit_ras = ra_flat[mask]
+        hit_decs = dec_flat[mask]
+
+        # Circular mean for RA to handle the 0h/24h wrap (e.g. Pisces)
+        ra_rad = np.deg2rad(hit_ras)
+        mean_ra_rad = np.arctan2(np.mean(np.sin(ra_rad)), np.mean(np.cos(ra_rad)))
         if mean_ra_rad < 0:
             mean_ra_rad += 2 * np.pi
 
         ra_deg = float(np.rad2deg(mean_ra_rad))
-        dec_deg = float(np.mean(decs))
-        logger.debug(f"Constellation center for {iau_abbrev}: RA={ra_deg:.2f} Dec={dec_deg:.2f}")
+        dec_deg = float(np.mean(hit_decs))
+        logger.info(f"Constellation center for {iau_abbrev}: RA={ra_deg:.2f} Dec={dec_deg:.2f} ({mask.sum()} grid points)")
         return (ra_deg, dec_deg)
 
     except Exception as exc:
@@ -541,19 +534,55 @@ class AstroqueryUniversal(BaseDataSource):
                         warnings.simplefilter("ignore")
                         simbad_instance.add_votable_fields(*extra_fields)
 
-                # query_criteria takes *criteria positional strings, NOT a keyword arg.
-                # Extract the 'criteria' key, expand any constellation names, then pass positionally.
-                if query_type == 'query_criteria':
-                    criteria_str = processed_kwargs.pop('criteria', None)
-                    if criteria_str:
-                        criteria_str = _expand_constellation_in_criteria(criteria_str)
-                        positional_args = [criteria_str]
+                # query_region: if coordinates is a plain string constellation name,
+                # resolve it to a SkyCoord now so SIMBAD doesn't forward it to SESAME.
+                if query_type == 'query_region':
+                    coord_val = processed_kwargs.get('coordinates')
+                    if isinstance(coord_val, str):
+                        resolved = _resolve_constellation(coord_val)
+                        if resolved:
+                            ra_c, dec_c = resolved
+                            logger.info(f"Resolved constellation '{coord_val}' to RA={ra_c:.4f}, Dec={dec_c:.4f} for query_region")
+                            processed_kwargs['coordinates'] = SkyCoord(
+                                ra=ra_c * u.deg, dec=dec_c * u.deg, frame='icrs'
+                            )
 
-                # vmag_max: post-filter by V magnitude after the query.
-                # Supported for query_region and query_criteria.
+                # query_criteria takes *criteria positional strings, NOT a keyword arg.
+                # Extract the 'criteria' key regardless of query_type — it is only valid for
+                # query_criteria and must never be forwarded to query_region or query_object.
+                criteria_str = processed_kwargs.pop('criteria', None)
+                if query_type == 'query_criteria' and criteria_str:
+                    criteria_str = _expand_constellation_in_criteria(criteria_str)
+                    positional_args = [criteria_str]
+
+                # vmag_max: apply V-magnitude filter.
+                # For query_criteria it goes into the ADQL string (server-side).
+                # For query_region we redirect to query_criteria so the filter is
+                # applied at SIMBAD before any rows are transmitted — fetching an
+                # unfiltered region (e.g. 12°) could return 100k+ rows and crash.
                 vmag_max = processed_kwargs.pop('vmag_max', None)
                 if vmag_max is not None:
                     vmag_max = float(vmag_max)
+
+                if query_type == 'query_region' and vmag_max is not None:
+                    coord_obj = processed_kwargs.get('coordinates')
+                    radius_qty = processed_kwargs.get('radius')
+                    if coord_obj is not None and radius_qty is not None:
+                        ra_deg = coord_obj.icrs.ra.deg
+                        dec_deg = coord_obj.icrs.dec.deg
+                        radius_deg = float(radius_qty.to(u.deg).value)
+                        sign = '+' if dec_deg >= 0 else ''
+                        criteria_built = (
+                            f"region(Circle, {ra_deg:.4f} {sign}{dec_deg:.4f}, {radius_deg:.4f}d)"
+                            f" & Vmag <= {vmag_max}"
+                        )
+                        logger.info(
+                            f"Redirecting query_region+vmag_max to query_criteria: {criteria_built}"
+                        )
+                        query_type = 'query_criteria'
+                        positional_args = [criteria_built]
+                        processed_kwargs = {}  # query_criteria takes no keyword args
+                        vmag_max = None        # filter applied server-side; no post-filter needed
 
                 service = simbad_instance
             # ----------------------------------------------------------------
@@ -632,12 +661,19 @@ class AstroqueryUniversal(BaseDataSource):
 
         # Strip internal routing/meta keys that must not be forwarded to the service method.
         # Also strip common LLM hallucinations that have no meaning to astroquery.
+        # Note: 'criteria' and 'vmag_max' are intentionally NOT stripped here — they are
+        # consumed by the SIMBAD-specific block in universal_query (popped before the method call).
         STRIP_KEYS = (
-            'query_type', 'service_name', 'auto_save', 'vmag_max', 'votable_fields',
+            'query_type', 'service_name', 'auto_save', 'votable_fields',
             'data_type', 'wavelength', 'magnitude', 'filter', 'band', 'survey',
         )
         for key in STRIP_KEYS:
             processed.pop(key, None)
+
+        # 'criteria' is only valid for query_criteria; remove it for all other query types
+        # so it never leaks into query_region, query_object, etc.
+        if query_type != 'query_criteria':
+            processed.pop('criteria', None)
         
         logger.info(f"Preprocessing parameters for {service_name} ({query_type}): {processed}")
         
@@ -724,12 +760,23 @@ class AstroqueryUniversal(BaseDataSource):
 
         def clean_value(value):
             """Converts numpy/special types to standard python types for JSON."""
+            # Masked / missing values → None
+            if value is np.ma.masked or isinstance(value, np.ma.core.MaskedConstant):
+                return None
             if isinstance(value, (np.integer, np.int64)):
                 return int(value)
             if isinstance(value, (np.floating, np.float32, np.float64)):
-                return float(value)
+                v = float(value)
+                # np.nan / np.inf are not valid JSON
+                if v != v or v == float('inf') or v == float('-inf'):
+                    return None
+                return v
+            if isinstance(value, np.bool_):
+                return bool(value)
             if isinstance(value, bytes):
                 return value.decode('utf-8', 'ignore')
+            if isinstance(value, np.ndarray):
+                return value.tolist()
             return value
         
         def process_row(row):
@@ -750,6 +797,7 @@ class AstroqueryUniversal(BaseDataSource):
                 # Generate filename
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"astroquery_{service_name}_{query_type}_{timestamp}.csv"
+                self.source_dir.mkdir(parents=True, exist_ok=True)
                 full_path = self.source_dir / filename
                 
                 # Save to CSV

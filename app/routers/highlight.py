@@ -6,6 +6,7 @@ from __future__ import annotations
 import html as html_module
 import re
 
+import markdown as markdown_lib
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -29,15 +30,12 @@ _CODE_BLOCK_RE = re.compile(r"```(\w*)[^\S\r\n]*\n([\s\S]*?\n?)```", re.MULTILIN
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _plain_to_html(text: str) -> str:
-    """Convert plain prose to escaped HTML paragraphs."""
-    paragraphs = re.split(r"\n{2,}", text.strip())
-    parts: list[str] = []
-    for para in paragraphs:
-        if para.strip():
-            escaped = html_module.escape(para).replace("\n", "<br>")
-            parts.append(f"<p>{escaped}</p>")
-    return "\n".join(parts)
+def _render_prose(text: str) -> str:
+    """Render plain prose with full markdown support (no fenced code — handled separately)."""
+    return markdown_lib.markdown(
+        text.strip(),
+        extensions=["tables", "sane_lists"],
+    )
 
 
 def _render(text: str) -> str:
@@ -48,7 +46,7 @@ def _render(text: str) -> str:
     for m in _CODE_BLOCK_RE.finditer(text):
         before = text[last_end : m.start()]
         if before.strip():
-            result.append(_plain_to_html(before))
+            result.append(_render_prose(before))
 
         lang = m.group(1).strip().lower()
         code = m.group(2)
@@ -75,10 +73,10 @@ def _render(text: str) -> str:
 
     remaining = text[last_end:]
     if remaining.strip():
-        result.append(_plain_to_html(remaining))
+        result.append(_render_prose(remaining))
 
     if not result:
-        return f"<p>{html_module.escape(text)}</p>"
+        return _render_prose(text)
     return "\n".join(result)
 
 

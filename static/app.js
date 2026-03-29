@@ -793,21 +793,8 @@
     } catch (err) {
       console.warn("[Highlight] API call failed:", err);
     }
-    // Client-side fallback: detect ```lang ... ``` blocks and wrap in <pre><code>
-    return text
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")  // escape first
-      .replace(
-        /```(\w*)\n?([\s\S]*?)```/g,
-        (_, lang, code) => {
-          const label = lang
-            ? `<div class="code-lang">${lang}</div>`
-            : "";
-          return `<div class="code-block">${label}<div class="highlight"><pre>${code}</pre></div></div>`;
-        }
-      )
-      .replace(/\n{2,}/g, "</p><p>")
-      .replace(/\n/g, "<br>")
-      .replace(/^(.+)$/, "<p>$1</p>");
+    // Client-side fallback: use marked.js for full markdown rendering
+    return marked.parse(text);
   }
 
   // ---- Send message ------------------------------------------------

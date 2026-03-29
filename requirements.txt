@@ -25,7 +25,8 @@ astro-datalab    # NOAO Data Lab access — this is the version compatible with 
 dace-query       # DACE (Data & Analysis Center for Exoplanets) — replaces removed astroquery.dace module
 pandas
 numpy
-astropy   
+astropy
+markdown>=3.7
 h5py      
 starlette
 astroquery 
